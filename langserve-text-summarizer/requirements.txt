@@ -1,0 +1,14 @@
+langserve
+fastapi
+sse_starlette==2.2.1
+uvicorn
+pydantic==2.10.6
+python-dotenv
+langchain
+langchain-google-genai                                                                                                                                       
+google-generativeai
+requests
+pytest
+pypdf
+nest-asyncio
+python-multipart
