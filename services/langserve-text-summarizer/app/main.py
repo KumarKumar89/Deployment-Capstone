@@ -6,7 +6,8 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
 from langserve import add_routes
 
 from app import __version__
@@ -64,8 +65,48 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
 
+    @app.middleware("http")
+    async def _attach_cors_on_errors(request, call_next):
+        """Ensure CORS headers are present even on handled error responses."""
+        origin = request.headers.get("origin")
+        try:
+            response = await call_next(request)
+        except Exception:
+            # Fallback envelope (handlers normally catch first).
+            response = JSONResponse(
+                status_code=500,
+                content={"error": {
+                    "code": "internal_error",
+                    "message": "An unexpected internal error occurred.",
+                    "status_code": 500,
+                    "request_id": None,
+                }},
+            )
+        if origin and "access-control-allow-origin" not in response.headers:
+            origins = settings.cors_allow_origins_list
+            allow = "*" if "*" in origins else (origin if origin in origins else "")
+            if allow:
+                response.headers["access-control-allow-origin"] = allow
+                response.headers["vary"] = "Origin"
+                response.headers["access-control-allow-headers"] = ",".join(
+                    settings.cors_allow_headers_list) or "*"
+                response.headers["access-control-allow-methods"] = ",".join(
+                    settings.cors_allow_methods_list)
+        return response
+
     app.add_middleware(RequestContextMiddleware)
     register_exception_handlers(app)
+
+    # CORS: configured via environment (CORS_ALLOW_ORIGINS, etc.).
+    # Default '*' so local file:// / static frontends can call the API.
+    cors_origins = settings.cors_allow_origins_list
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials="*" not in cors_origins,
+        allow_methods=settings.cors_allow_methods_list,
+        allow_headers=settings.cors_allow_headers_list,
+    )
 
     # Typed REST endpoints (/health, /ready, /summarize/text, /summarize-pdf)
     app.include_router(router)

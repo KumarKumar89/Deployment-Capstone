@@ -29,6 +29,17 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8080)
 
+    # --- CORS ---------------------------------------------------------------
+    cors_allow_origins: str = Field(
+        default="*",
+        description=(
+            "Comma-separated list of allowed origins, or '*' for any origin "
+            "(convenient for local file:// / static frontend testing)."
+        ),
+    )
+    cors_allow_methods: str = Field(default="GET,POST,OPTIONS")
+    cors_allow_headers: str = Field(default="*")
+
     # --- LLM (Google Gemini via langchain-google-genai) -------------------
     google_api_key: SecretStr = Field(repr=False)
     gemini_model: str = Field(default="gemini-2.0-flash")
@@ -44,6 +55,21 @@ class Settings(BaseSettings):
     langsmith_project: str = Field(default="langserve-text-summarizer")
     otel_enabled: bool = Field(default=False)
     otel_exporter_otlp_endpoint: str | None = None
+
+    @property
+    def cors_allow_origins_list(self) -> list[str]:
+        """Parsed list of allowed CORS origins ('*' means any origin)."""
+        return [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
+
+    @property
+    def cors_allow_methods_list(self) -> list[str]:
+        """Parsed list of allowed HTTP methods."""
+        return [m.strip().upper() for m in self.cors_allow_methods.split(",") if m.strip()]
+
+    @property
+    def cors_allow_headers_list(self) -> list[str]:
+        """Parsed list of allowed request headers."""
+        return [h.strip() for h in self.cors_allow_headers.split(",") if h.strip()]
 
     @field_validator("log_level")
     @classmethod

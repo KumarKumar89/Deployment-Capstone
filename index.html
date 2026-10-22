@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LangServe Text Summarizer — Frontend</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Spinner */
+    .spinner {
+      border: 3px solid rgba(255, 255, 255, 0.35);
+      border-top-color: #fff;
+      border-radius: 9999px;
+      width: 1.1rem;
+      height: 1.1rem;
+      animation: spin 0.7s linear infinite;
+      display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    /* Blinking caret for streaming output */
+    .streaming-caret::after {
+      content: "▍";
+      animation: blink 1s step-start infinite;
+      color: #6366f1;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+    pre.wrap { white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <div class="max-w-5xl mx-auto px-4 py-10">
+
+    <!-- Header -->
+    <header class="mb-8">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center font-bold text-lg">S</div>
+        <div>
+          <h1 class="text-2xl font-bold tracking-tight">LangServe Text Summarizer</h1>
+          <p class="text-sm text-slate-400">Gemini-powered summarization API · frontend test harness</p>
+        </div>
+        <span id="serverBadge" class="ml-auto text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-400">server: unknown</span>
+      </div>
+    </header>
+
+    <!-- Config row -->
+    <section class="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-6">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <label class="block">
+          <span class="text-xs font-semibold uppercase tracking-wide text-slate-400">API Base URL</span>
+          <input id="baseUrl" type="text" value="http://localhost:8000"
+                 class="mt-1 w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+        </label>
+        <label class="block">
+          <span class="text-xs font-semibold uppercase tracking-wide text-slate-400">Endpoint Mode</span>
+          <select id="mode"
+                  class="mt-1 w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <option value="langserve-invoke">/summarize/invoke (LangServe, JSON)</option>
+            <option value="langserve-stream">/summarize/stream (LangServe, SSE tokens)</option>
+            <option value="rest-text">/summarize/text (typed REST response)</option>
+          </select>
+        </label>
+        <label class="block">
+          <span class="text-xs font-semibold uppercase tracking-wide text-slate-400">Summary Style</span>
+          <select id="style"
+                  class="mt-1 w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <option value="concise">Concise (~20% of original)</option>
+            <option value="bullets">Bullet key points</option>
+            <option value="detailed">Detailed executive summary</option>
+          </select>
+        </label>
+      </div>
+      <p class="text-xs text-slate-500 mt-3">
+        Style is applied client-side as a prompt prefix (the server schema strictly accepts
+        <code class="text-slate-400">{ "text": string }</code>). All other parameters are enforced by the backend.
+      </p>
+    </section>
+
+    <!-- Input -->
+    <section class="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-6">
+      <div class="flex items-center justify-between mb-2">
+        <label for="inputText" class="text-xs font-semibold uppercase tracking-wide text-slate-400">Input Text</label>
+        <span id="charCount" class="text-xs text-slate-500">0 chars</span>
+      </div>
+      <textarea id="inputText" rows="8" spellcheck="false"
+        class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        placeholder="Paste an article, report or notes here…">Large language models (LLMs) are increasingly described as a new kind of operating system. Just as traditional operating systems abstract hardware and provide common services like file systems, process scheduling, and device drivers, LLMs abstract vast amounts of human knowledge and provide common services such as text generation, reasoning, translation, and code synthesis. Applications built on top of LLMs — agents, copilots, and research assistants — play the role of programs running on this new platform. Proponents argue that the comparison highlights three shifts: first, prompting replaces programming as the primary way to direct computation; second, the model's context window acts like working memory, while retrieval systems serve as virtual memory over external data; third, tool use and plugin ecosystems resemble system calls and driver interfaces. Critics note the analogy breaks down on determinism, cost structure, and reliability, since LLM outputs are probabilistic and expensive to serve. Nevertheless, the framing has influenced how companies organize their AI stacks, with "LLM OS" layers emerging around orchestration frameworks, vector databases, guardrail services, and observability tooling.</textarea>
+      <div class="flex flex-wrap items-center gap-3 mt-4">
+        <button id="runBtn"
+          class="inline-flex items-center gap-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed px-5 py-2.5 text-sm font-semibold transition">
+          <span id="btnSpinner" class="spinner hidden"></span>
+          <span id="btnLabel">Run / Summarize</span>
+        </button>
+        <button id="stopBtn" class="hidden rounded-lg bg-slate-700 hover:bg-slate-600 px-4 py-2.5 text-sm font-semibold">Stop</button>
+        <button id="clearBtn" class="rounded-lg border border-slate-700 hover:bg-slate-800 px-4 py-2.5 text-sm">Clear</button>
+      </div>
+    </section>
+
+    <!-- Output -->
+    <section class="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+      <div class="flex flex-wrap items-center gap-3 mb-3">
+        <span class="text-xs font-semibold uppercase tracking-wide text-slate-400">Response</span>
+        <span id="statusChip" class="text-xs px-2.5 py-1 rounded-full bg-slate-800 text-slate-400">idle</span>
+        <span id="endpointChip" class="text-xs px-2.5 py-1 rounded-full bg-slate-800 text-slate-500 font-mono">—</span>
+        <span id="latencyChip" class="text-xs px-2.5 py-1 rounded-full bg-slate-800 text-slate-500"></span>
+      </div>
+      <pre id="output" class="wrap rounded-lg bg-slate-950 border border-slate-800 p-4 text-sm leading-relaxed min-h-[8rem] max-h-[26rem] overflow-y-auto text-slate-200">Output will appear here.</pre>
+      <p id="errorBox" class="hidden mt-3 rounded-lg border border-red-800 bg-red-950/50 text-red-300 text-sm px-4 py-3"></p>
+    </section>
+
+    <footer class="text-center text-xs text-slate-600 mt-8">
+      Tip: full interactive docs at <a class="text-indigo-400 underline" href="http://localhost:8000/docs" target="_blank" rel="noreferrer">/docs</a>
+    </footer>
+  </div>
+
+  <script>
+    "use strict";
+
+    // ---------- DOM refs ----------
+    const $ = (id) => document.getElementById(id);
+    const baseUrlEl = $("baseUrl"), modeEl = $("mode"), styleEl = $("style");
+    const inputEl = $("inputText"), outEl = $("output"), errEl = $("errorBox");
+    const runBtn = $("runBtn"), stopBtn = $("stopBtn"), clearBtn = $("clearBtn");
+    const btnSpinner = $("btnSpinner"), btnLabel = $("btnLabel");
+    const statusChip = $("statusChip"), endpointChip = $("endpointChip"), latencyChip = $("latencyChip");
+    const charCount = $("charCount"), serverBadge = $("serverBadge");
+
+    let abortController = null;
+
+    // ---------- Helpers ----------
+    const STYLE_PREFIX = {
+      concise: "",
+      bullets: "Summarize the following text as a short list of bullet-point key takeaways.\n\nTEXT:\n",
+      detailed: "Write a detailed executive summary of the following text, covering all major points in structured paragraphs.\n\nTEXT:\n",
+    };
+
+    function setStatus(text, cls) {
+      statusChip.textContent = text;
+      statusChip.className = "text-xs px-2.5 py-1 rounded-full " + cls;
+    }
+    function showError(msg) {
+      errEl.textContent = msg;
+      errEl.classList.remove("hidden");
+    }
+    function hideError() { errEl.classList.add("hidden"); }
+    function setLoading(loading) {
+      runBtn.disabled = loading;
+      btnSpinner.classList.toggle("hidden", !loading);
+      btnLabel.textContent = loading ? "Running…" : "Run / Summarize";
+      stopBtn.classList.toggle("hidden", !loading);
+    }
+
+    function buildPayload() {
+      const raw = inputEl.value;
+      if (!raw.trim()) throw new Error("Input text is empty.");
+      const styled = STYLE_PREFIX[styleEl.value] + raw;
+      return { input: { text: styled }, stream_mode: ["tokens"] };
+    }
+
+    function resolveTarget() {
+      const base = baseUrlEl.value.replace(/\/+$/, "");
+      const mode = modeEl.value;
+      if (mode === "rest-text") {
+        return { url: base + "/summarize/text", rest: true };
+      }
+      if (mode === "langserve-stream") {
+        return { url: base + "/summarize/stream", rest: false };
+      }
+      return { url: base + "/summarize/invoke", rest: false };
+    }
+
+    // ---------- Health badge ----------
+    async function pingHealth() {
+      const base = baseUrlEl.value.replace(/\/+$/, "");
+      try {
+        const r = await fetch(base + "/health", { method: "GET" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const j = await r.json();
+        serverBadge.textContent = "● online · " + j.service + " v" + j.version;
+        serverBadge.className = "ml-auto text-xs px-3 py-1 rounded-full bg-emerald-900/60 text-emerald-300";
+      } catch {
+        serverBadge.textContent = "● offline / unreachable";
+        serverBadge.className = "ml-auto text-xs px-3 py-1 rounded-full bg-red-900/60 text-red-300";
+      }
+    }
+
+    // ---------- Run (non-streaming modes) ----------
+    async function runOnce() {
+      hideError();
+      outEl.textContent = "";
+      outEl.classList.remove("streaming-caret");
+      latencyChip.textContent = "";
+      const target = resolveTarget();
+      endpointChip.textContent = target.url;
+      setStatus("requesting…", "bg-amber-900/60 text-amber-300");
+      setLoading(true);
+      abortController = new AbortController();
+      const t0 = performance.now();
+      try {
+        let body, headers = { "Content-Type": "application/json" };
+        if (target.rest) {
+          body = JSON.stringify({ text: STYLE_PREFIX[styleEl.value] + inputEl.value });
+        } else {
+          body = JSON.stringify(buildPayload());
+        }
+        const resp = await fetch(target.url, {
+          method: "POST", headers, body, signal: abortController.signal,
+        });
+        const ms = Math.round(performance.now() - t0);
+        latencyChip.textContent = ms + " ms";
+        const text = await resp.text();
+        let pretty;
+        try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch { pretty = text; }
+        if (resp.ok) {
+          // Extract readable summary when possible.
+          let shown = pretty;
+          try {
+            const j = JSON.parse(text);
+            if (target.rest && j.summary) shown = j.summary + "\n\n—— raw response ——\n" + pretty;
+            else if (!target.rest && typeof j.output === "string") shown = j.output + "\n\n—— raw response ——\n" + pretty;
+          } catch { /* keep raw */ }
+          outEl.textContent = shown;
+          setStatus("HTTP " + resp.status + " OK", "bg-emerald-900/60 text-emerald-300");
+        } else {
+          outEl.textContent = pretty;
+          setStatus("HTTP " + resp.status, "bg-red-900/60 text-red-300");
+          showError("Server returned HTTP " + resp.status + ". See raw error envelope above.");
+        }
+      } catch (e) {
+        if (e.name === "AbortError") {
+          setStatus("aborted", "bg-slate-700 text-slate-300");
+        } else {
+          setStatus("network error", "bg-red-900/60 text-red-300");
+          showError("Could not reach " + target.url + " — is the backend running? (" + e.message + ")");
+          outEl.textContent = "";
+        }
+      } finally {
+        setLoading(false);
+        abortController = null;
+      }
+    }
+
+    // ---------- Run (SSE streaming mode) ----------
+    async function runStream() {
+      hideError();
+      outEl.textContent = "";
+      latencyChip.textContent = "";
+      const target = resolveTarget();
+      endpointChip.textContent = target.url;
+      setStatus("streaming…", "bg-amber-900/60 text-amber-300");
+      setLoading(true);
+      outEl.classList.add("streaming-caret");
+      abortController = new AbortController();
+      const t0 = performance.now();
+      let httpStatus = null;
+      try {
+        const resp = await fetch(target.url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(buildPayload()),
+          signal: abortController.signal,
+        });
+        httpStatus = resp.status;
+        endpointChip.textContent = target.url + " → HTTP " + resp.status;
+        if (!resp.ok) {
+          const errText = await resp.text();
+          outEl.textContent = errText;
+          setStatus("HTTP " + resp.status, "bg-red-900/60 text-red-300");
+          showError("Streaming request failed with HTTP " + resp.status + ".");
+          return;
+        }
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        let finalEvent = null;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          // Parse SSE frames separated by blank lines.
+          let idx;
+          while ((idx = buf.indexOf("\n\n")) !== -1) {
+            const frame = buf.slice(0, idx);
+            buf = buf.slice(idx + 2);
+            let event = "lifecycle", data = "";
+            for (const line of frame.split("\n")) {
+              if (line.startsWith("event:")) event = line.slice(6).trim();
+              else if (line.startsWith("data:")) data += line.slice(5).trim();
+            }
+            if (!data) continue;
+            if (event === "values" || event === "end") {
+              finalEvent = { event, data };
+            } else {
+              // token events: data is a JSON-encoded string chunk
+              try {
+                const parsed = JSON.parse(data);
+                if (typeof parsed === "string") outEl.textContent += parsed;
+                else outEl.textContent += JSON.stringify(parsed);
+              } catch {
+                outEl.textContent += data;
+              }
+            }
+            outEl.scrollTop = outEl.scrollHeight;
+          }
+        }
+        latencyChip.textContent = Math.round(performance.now() - t0) + " ms";
+        if (finalEvent) {
+          try {
+            const j = JSON.parse(finalEvent.data);
+            const summary = typeof j.output === "string" ? j.output : JSON.stringify(j, null, 2);
+            if (!outEl.textContent.trim()) outEl.textContent = summary;
+            else outEl.textContent += "\n\n—— final values event ——\n" + JSON.stringify(j, null, 2);
+          } catch { /* ignore */ }
+        }
+        setStatus("HTTP " + httpStatus + " · stream complete", "bg-emerald-900/60 text-emerald-300");
+      } catch (e) {
+        if (e.name === "AbortError") {
+          setStatus("aborted", "bg-slate-700 text-slate-300");
+        } else {
+          setStatus("network error", "bg-red-900/60 text-red-300");
+          showError("Could not stream from " + target.url + " — is the backend running? (" + e.message + ")");
+        }
+      } finally {
+        outEl.classList.remove("streaming-caret");
+        setLoading(false);
+        abortController = null;
+      }
+    }
+
+    // ---------- Wiring ----------
+    runBtn.addEventListener("click", () => {
+      modeEl.value === "langserve-stream" ? runStream() : runOnce();
+    });
+    stopBtn.addEventListener("click", () => abortController && abortController.abort());
+    clearBtn.addEventListener("click", () => {
+      inputEl.value = ""; hideError(); outEl.textContent = "Output will appear here.";
+      statusChip.textContent = "idle"; statusChip.className = "text-xs px-2.5 py-1 rounded-full bg-slate-800 text-slate-400";
+      endpointChip.textContent = "—"; latencyChip.textContent = ""; updateCount();
+    });
+    inputEl.addEventListener("input", updateCount);
+    function updateCount() {
+      const n = inputEl.value.length;
+      charCount.textContent = n.toLocaleString() + " chars";
+      charCount.className = "text-xs " + (n > 100000 ? "text-red-400" : "text-slate-500");
+    }
+    baseUrlEl.addEventListener("change", pingHealth);
+
+    pingHealth();
+    updateCount();
+  </script>
+</body>
+</html>
